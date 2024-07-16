@@ -39,11 +39,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 
 	config := &network.Config{
-		// Control the "default" network. At the moment, this is the only network.
 		Network: "default",
 
-		// Enable this network. Setting this to false will disconnect this test
-		// instance from this network. You probably don't want to do that.
 		Enable: true,
 		Default: network.LinkShape{
 			Latency:   100 * time.Millisecond,
@@ -60,6 +57,10 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	if err != nil {
 		panic(err)
 	}
+
+	// TODO: if group id == boot, publish its address
+	// if group id == general, subscribe it and use it for bootstrapping
+
 	go discoverPeers(ctx, host)
 
 	gossipsub, err := pubsub.NewGossipSub(ctx, host)
@@ -72,6 +73,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 	go streamConsoleTo(ctx, topic)
 
+	// TODO: change streamConsoleTo -> streamFileTo, with file dir specified in manifest.toml
+
 	subscribe, err := topic.Subscribe()
 	if err != nil {
 		panic(err)
@@ -82,10 +85,6 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 }
 
 func initDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
-	// Start a DHT, for use in peer discovery. We can't just make a new DHT
-	// client because we want each peer to maintain its own local copy of the
-	// DHT, so that the bootstrapping node of the DHT can go down without
-	// inhibiting future peer discovery.
 	kademliaDHT, err := dht.New(ctx, host)
 	if err != nil {
 		panic(err)
