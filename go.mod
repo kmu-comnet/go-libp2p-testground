@@ -1,4 +1,4 @@
-module go-libp2p-testground
+module node
 
 go 1.22.5
 

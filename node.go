@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -38,10 +37,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
 
-	containerAddr, err := netclient.GetDataNetworkIP()
-	if err != nil {
-		panic(err)
-	}
+	containerAddr, _ := netclient.GetDataNetworkIP()
 
 	config := &network.Config{
 		Network: "default",
@@ -58,10 +54,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
 	netclient.MustConfigureNetwork(ctx, config)
 
-	host, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/%s/tcp/3000", containerAddr.String()))
-	if err != nil {
-		panic(err)
-	}
+	host, _ := libp2p.New(libp2p.ListenAddrStrings("/ip4/%s/tcp/3000", containerAddr.String()))
 
 	ready := sync.State("ready to bootstrap")
 	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
@@ -72,31 +65,29 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			ID:   host.ID().String(),
 			addr: containerAddr.String(),
 		}
-		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, runenv.TestInstanceCount-1)
-	} else {
-		client.Subscribe(ctx, tgBootstrap, tgChannel)
-		client.SignalEntry(ctx, ready)
-		bootInfo := <-tgChannel
-		bootAddr, err := peer.AddrInfoFromString(fmt.Sprintf("/ip4/%s/tcp/3000", bootInfo.addr))
-		if err != nil {
-			panic(err)
-		}
-		host.Connect(ctx, *bootAddr)
+		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, runenv.TestInstanceCount)
 	}
+
+	client.Subscribe(ctx, tgBootstrap, tgChannel)
+	seq, _ := client.SignalEntry(ctx, ready)
+	bootInfo := <-tgChannel
+	bootAddr, _ := peer.AddrInfoFromString(fmt.Sprintf("/ip4/%s/tcp/3000", bootInfo.addr))
+	host.Connect(ctx, *bootAddr)
 
 	go discoverPeers(ctx, host)
 
-	gossipsub, err := pubsub.NewGossipSub(ctx, host)
-	if err != nil {
-		panic(err)
-	}
-	topic, err := gossipsub.Join(*topicNameFlag)
-	if err != nil {
-		panic(err)
-	}
-	go streamConsoleTo(ctx, topic)
+	gossipsub, _ := pubsub.NewGossipSub(ctx, host)
+	topic, _ := gossipsub.Join(*topicNameFlag)
 
-	// TODO: change streamConsoleTo -> streamFileTo, with file dir specified in manifest.toml
+	switch seq {
+	case 11:
+		go streamFileTo(ctx, topic, runenv.StringParam("small"))
+	case 23:
+		go streamFileTo(ctx, topic, runenv.StringParam("medium"))
+	case 49:
+		go streamFileTo(ctx, topic, runenv.StringParam("large"))
+	default:
+	}
 
 	subscribe, err := topic.Subscribe()
 	if err != nil {
@@ -124,7 +115,7 @@ func discoverPeers(ctx context.Context, host host.Host) {
 		}
 		for peer := range peerChannel {
 			if peer.ID == host.ID() {
-				continue // No self connection
+				continue
 			}
 			err := host.Connect(ctx, peer)
 			if err != nil {
@@ -138,16 +129,14 @@ func discoverPeers(ctx context.Context, host host.Host) {
 	fmt.Println("Peer discovery complete")
 }
 
-func streamConsoleTo(ctx context.Context, topic *pubsub.Topic) {
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		str, err := reader.ReadString('\n')
-		if err != nil {
-			panic(err)
-		}
-		if err := topic.Publish(ctx, []byte(str)); err != nil {
-			fmt.Println("### Publish error:", err)
-		}
+func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return
+	}
+	if err := topic.Publish(ctx, data); err != nil {
+		fmt.Println("### Publish error:", err)
 	}
 }
 
