@@ -6,24 +6,29 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
+	peer "github.com/libp2p/go-libp2p/core/peer"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
+	"github.com/testground/sdk-go/sync"
 )
 
 var (
 	topicNameFlag = flag.String("topicName", "comnet", "name of topic to join")
 )
+
+type nodeInfo struct {
+	ID   string
+	addr string
+}
 
 func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	flag.Parse()
@@ -58,8 +63,26 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		panic(err)
 	}
 
-	// TODO: if group id == boot, publish its address
-	// if group id == general, subscribe it and use it for bootstrapping
+	ready := sync.State("ready to bootstrap")
+	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
+	tgChannel := make(chan *nodeInfo, 1)
+
+	if runenv.TestGroupID == "boot" {
+		bootInfo := nodeInfo{
+			ID:   host.ID().String(),
+			addr: containerAddr.String(),
+		}
+		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, runenv.TestInstanceCount-1)
+	} else {
+		client.Subscribe(ctx, tgBootstrap, tgChannel)
+		client.SignalEntry(ctx, ready)
+		bootInfo := <-tgChannel
+		bootAddr, err := peer.AddrInfoFromString(fmt.Sprintf("/ip4/%s/tcp/3000", bootInfo.addr))
+		if err != nil {
+			panic(err)
+		}
+		host.Connect(ctx, *bootAddr)
+	}
 
 	go discoverPeers(ctx, host)
 
@@ -84,36 +107,14 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	return err
 }
 
-func initDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
+func discoverPeers(ctx context.Context, host host.Host) {
 	kademliaDHT, err := dht.New(ctx, host)
 	if err != nil {
 		panic(err)
 	}
-	if err = kademliaDHT.Bootstrap(ctx); err != nil {
-		panic(err)
-	}
-	var waitgroup sync.WaitGroup
-	for _, peerAddr := range dht.DefaultBootstrapPeers {
-		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
-		waitgroup.Add(1)
-		go func() {
-			defer waitgroup.Done()
-			if err := host.Connect(ctx, *peerinfo); err != nil {
-				fmt.Println("Bootstrap warning:", err)
-			}
-		}()
-	}
-	waitgroup.Wait()
-
-	return kademliaDHT
-}
-
-func discoverPeers(ctx context.Context, host host.Host) {
-	kademliaDHT := initDHT(ctx, host)
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
 	dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
 
-	// Look for others who have announced and attempt to connect to them
 	anyConnected := false
 	for !anyConnected {
 		fmt.Println("Searching for peers...")
