@@ -52,48 +52,67 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
+	ready := sync.State("network configured")
+
 	netclient.MustConfigureNetwork(ctx, config)
+	seq, _ := client.SignalEntry(ctx, ready)
 
-	host, _ := libp2p.New(libp2p.ListenAddrStrings("/ip4/%s/tcp/3000", containerAddr.String()))
+	addr := fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.String())
+	host, _ := libp2p.New(libp2p.ListenAddrStrings(addr))
+	runenv.RecordMessage("created libp2p host")
 
-	ready := sync.State("ready to bootstrap")
 	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
 	tgChannel := make(chan *nodeInfo, 1)
+	client.Subscribe(ctx, tgBootstrap, tgChannel)
+	runenv.RecordMessage("subscribed to bootstrap info")
 
 	if runenv.TestGroupID == "boot" {
 		bootInfo := nodeInfo{
 			ID:   host.ID().String(),
-			addr: containerAddr.String(),
+			addr: addr,
 		}
-		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, runenv.TestInstanceCount)
+		runenv.RecordMessage("before publishing bootstrap info")
+		client.PublishSubscribe(ctx, tgBootstrap, bootInfo, tgChannel)
 	}
 
-	client.Subscribe(ctx, tgBootstrap, tgChannel)
-	seq, _ := client.SignalEntry(ctx, ready)
 	bootInfo := <-tgChannel
-	bootAddr, _ := peer.AddrInfoFromString(fmt.Sprintf("/ip4/%s/tcp/3000", bootInfo.addr))
+	bootAddr, _ := peer.AddrInfoFromString(bootInfo.addr)
+	if bootAddr != nil {
+		runenv.RecordMessage(fmt.Sprintf("received bootstrap info: %s, connecting...", bootInfo.addr))
+	} else if bootInfo != nil {
+		runenv.RecordMessage(fmt.Sprintf("failed to parse bootInfo: %s into multiaddr", bootInfo.addr))
+	} else {
+		runenv.RecordMessage("failed to receive bootInfo")
+	}
+
 	host.Connect(ctx, *bootAddr)
+	runenv.RecordMessage("connected to boot node, discovering peers...")
 
 	go discoverPeers(ctx, host)
 
 	gossipsub, _ := pubsub.NewGossipSub(ctx, host)
 	topic, _ := gossipsub.Join(*topicNameFlag)
-
-	switch seq {
-	case 11:
-		go streamFileTo(ctx, topic, runenv.StringParam("small"))
-	case 23:
-		go streamFileTo(ctx, topic, runenv.StringParam("medium"))
-	case 49:
-		go streamFileTo(ctx, topic, runenv.StringParam("large"))
-	default:
-	}
+	runenv.RecordMessage("joined gossipsub topic")
 
 	subscribe, err := topic.Subscribe()
 	if err != nil {
 		panic(err)
 	}
+	runenv.RecordMessage("subscribed gossipsub topic")
 	printMessagesFrom(ctx, subscribe)
+
+	switch seq {
+	case 11:
+		go streamFileTo(ctx, topic, runenv.StringParam("small"))
+		runenv.RecordMessage("published small file")
+	case 23:
+		go streamFileTo(ctx, topic, runenv.StringParam("medium"))
+		runenv.RecordMessage("published medium file")
+	case 49:
+		go streamFileTo(ctx, topic, runenv.StringParam("large"))
+		runenv.RecordMessage("published large file")
+	default:
+	}
 
 	return err
 }
