@@ -14,6 +14,7 @@ import (
 	peer "github.com/libp2p/go-libp2p/core/peer"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
@@ -25,8 +26,8 @@ var (
 )
 
 type nodeInfo struct {
-	ID   string
-	addr string
+	ID   peer.ID
+	Addr ma.Multiaddr
 }
 
 func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
@@ -36,8 +37,6 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("before sync.MustBoundClient")
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
-
-	containerAddr, _ := netclient.GetDataNetworkIP()
 
 	config := &network.Config{
 		Network: "default",
@@ -52,41 +51,54 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
-	ready := sync.State("network configured")
-
 	netclient.MustConfigureNetwork(ctx, config)
-	seq, _ := client.SignalEntry(ctx, ready)
 
-	addr := fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.String())
-	host, _ := libp2p.New(libp2p.ListenAddrStrings(addr))
+	containerAddr, _ := netclient.GetDataNetworkIP()
+	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
+	host, err := libp2p.New(libp2p.ListenAddrs(hostAddr))
 	runenv.RecordMessage("created libp2p host")
 
 	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
 	tgChannel := make(chan *nodeInfo, 1)
-	client.Subscribe(ctx, tgBootstrap, tgChannel)
-	runenv.RecordMessage("subscribed to bootstrap info")
+	ready := sync.State("ready to bootstrap")
+	var bootstrap *peer.AddrInfo
 
 	if runenv.TestGroupID == "boot" {
 		bootInfo := nodeInfo{
-			ID:   host.ID().String(),
-			addr: addr,
+			ID:   host.ID(),
+			Addr: hostAddr,
 		}
-		runenv.RecordMessage("before publishing bootstrap info")
-		client.PublishSubscribe(ctx, tgBootstrap, bootInfo, tgChannel)
-	}
+		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, 50)
+		runenv.RecordMessage("published bootstrap info, waiting...")
+		bootstrap = &peer.AddrInfo{
+			ID:    host.ID(),
+			Addrs: []ma.Multiaddr{hostAddr},
+		}
 
-	bootInfo := <-tgChannel
-	bootAddr, _ := peer.AddrInfoFromString(bootInfo.addr)
-	if bootAddr != nil {
-		runenv.RecordMessage(fmt.Sprintf("received bootstrap info: %s, connecting...", bootInfo.addr))
-	} else if bootInfo != nil {
-		runenv.RecordMessage(fmt.Sprintf("failed to parse bootInfo: %s into multiaddr", bootInfo.addr))
 	} else {
-		runenv.RecordMessage("failed to receive bootInfo")
+
+		client.Subscribe(ctx, tgBootstrap, tgChannel)
+		tgMessage := <-tgChannel
+
+		if tgMessage != nil {
+			fmt.Printf("tgMessage.ID: %s, Addr: %s", tgMessage.ID.String(), tgMessage.Addr.String())
+			bootstrap = &peer.AddrInfo{
+				ID:    tgMessage.ID,
+				Addrs: []ma.Multiaddr{tgMessage.Addr},
+			}
+			runenv.RecordMessage("received bootstrap info, signaling...")
+			client.SignalEntry(ctx, ready)
+		}
 	}
 
-	host.Connect(ctx, *bootAddr)
-	runenv.RecordMessage("connected to boot node, discovering peers...")
+	if bootstrap != nil {
+		runenv.RecordMessage("received bootstrap info, connecting...")
+		host.Connect(ctx, *bootstrap)
+		runenv.RecordMessage("connected to boot node, discovering peers...")
+	} else {
+		runenv.RecordMessage("failed to receive bootInfo, exiting...")
+		return err
+	}
 
 	go discoverPeers(ctx, host)
 
@@ -101,7 +113,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("subscribed gossipsub topic")
 	printMessagesFrom(ctx, subscribe)
 
-	switch seq {
+	/*switch seq {
 	case 11:
 		go streamFileTo(ctx, topic, runenv.StringParam("small"))
 		runenv.RecordMessage("published small file")
@@ -112,7 +124,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		go streamFileTo(ctx, topic, runenv.StringParam("large"))
 		runenv.RecordMessage("published large file")
 	default:
-	}
+	}*/
 
 	return err
 }
