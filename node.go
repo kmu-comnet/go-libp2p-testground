@@ -10,6 +10,7 @@ import (
 
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 	peerstore "github.com/libp2p/go-libp2p/core/peerstore"
@@ -60,6 +61,16 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	myAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
 	host, _ := libp2p.New(libp2p.ListenAddrs(myAddr))
 	runenv.RecordMessage("created libp2p host")
+
+	dhtOpts := []dht.Option{
+		dht.Mode(dht.ModeServer),
+		dht.BucketSize(20),
+	}
+
+	_, err := dht.New(ctx, host, dhtOpts...)
+	if err != nil {
+		fmt.Printf("Failed initializing dht, error: %s\n", err)
+	}
 
 	var bootstrap peer.AddrInfo
 
