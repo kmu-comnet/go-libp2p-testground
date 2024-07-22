@@ -50,59 +50,47 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		RoutingPolicy: network.DenyAll,
 	}
 
+	ready := sync.State("network-configured")
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
 	netclient.MustConfigureNetwork(ctx, config)
+	seq, err := client.SignalEntry(ctx, ready)
 
 	containerAddr, _ := netclient.GetDataNetworkIP()
 	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
 	host, _ := libp2p.New(libp2p.ListenAddrs(hostAddr))
 	runenv.RecordMessage("created libp2p host")
 
-	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
-	tgChannel := make(chan *nodeInfo, 1)
-	ready := sync.State("ready to bootstrap")
-	var bootstrap *peer.AddrInfo
-	var seq int64
+	var bootstrap peer.AddrInfo
 
 	switch runenv.TestGroupID {
 	case "boot":
-		myInfo := nodeInfo{
-			ID:   host.ID(),
-			Addr: host.Addrs()[0],
-		}
-		runenv.RecordMessage("publishing bootstrap info...")
-		client.PublishAndWait(ctx, tgBootstrap, myInfo, ready, runenv.TestInstanceCount)
-		seq, err := client.SignalAndWait(ctx, ready, runenv.TestInstanceCount)
-		if err != nil {
-			fmt.Println(seq)
-			panic(err)
-		}
-		bootstrap = &peer.AddrInfo{
+		myInfo := peer.AddrInfo{
 			ID:    host.ID(),
 			Addrs: host.Addrs(),
 		}
-	case "worker":
-		tgSubscription, _ := client.Subscribe(ctx, tgBootstrap, tgChannel)
-		tgMessage := <-tgChannel
-		bootstrap = &peer.AddrInfo{
-			ID:    tgMessage.ID,
-			Addrs: []ma.Multiaddr{tgMessage.Addr},
-		}
-		runenv.RecordMessage("received bootstrap info, signaling...")
-		seq, err := client.SignalAndWait(ctx, ready, runenv.TestInstanceCount)
+		runenv.RecordMessage("publishing bootstrap info...")
+		err := tgPublish(ctx, client, myInfo)
 		if err != nil {
-			fmt.Println(seq)
 			panic(err)
 		}
-		tgSubscription.Done()
+		bootstrap = myInfo
+	case "worker":
+		bootInfo, err := tgSubscribe(ctx, client, runenv)
+		if err != nil {
+			panic(err)
+		}
+		bootstrap = bootInfo
+		runenv.RecordMessage("received bootstrap info...")
 	default:
 		runenv.RecordMessage("invalid group id")
 	}
 
 	runenv.RecordMessage("all peers ready, connecting...")
-	host.Connect(ctx, *bootstrap)
-	runenv.RecordMessage("connected to boot node, discovering peers...")
-
+	err = host.Connect(ctx, bootstrap)
+	if err != nil {
+		panic(err)
+	}
+	runenv.RecordMessage("connected to boot node, discovering others...")
 	go discoverPeers(ctx, host)
 
 	gossipsub, _ := pubsub.NewGossipSub(ctx, host)
@@ -142,7 +130,6 @@ func discoverPeers(ctx context.Context, host host.Host) {
 
 	anyConnected := false
 	for !anyConnected {
-		fmt.Println("Searching for peers...")
 		peerChannel, err := routingDiscovery.FindPeers(ctx, *topicNameFlag)
 		if err != nil {
 			panic(err)
@@ -182,4 +169,37 @@ func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription) {
 		}
 		fmt.Println(message.ReceivedFrom, ": ", string(message.Message.Data))
 	}
+}
+
+func tgPublish(ctx context.Context, client sync.Client, payload peer.AddrInfo) error {
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
+	_, err := client.Publish(subCtx, tgTopic, payload)
+	return err
+}
+
+func tgSubscribe(ctx context.Context, client sync.Client, runenv *runtime.RunEnv) (peer.AddrInfo, error) {
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
+	tgChannel := make(chan peer.AddrInfo, 1)
+	_, err := client.Subscribe(subCtx, tgTopic, tgChannel)
+	if err != nil {
+		panic(err)
+	}
+
+	bootInfo := peer.AddrInfo{}
+
+	select {
+	case tgMessage := <-tgChannel:
+		bootInfo = peer.AddrInfo(tgMessage)
+	case <-ctx.Done():
+		return bootInfo, ctx.Err()
+	}
+	runenv.D().Counter("got.info").Inc(1)
+
+	return bootInfo, nil
 }
