@@ -47,8 +47,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		Enable: true,
 		Default: network.LinkShape{
-			Latency:   100 * time.Millisecond,
-			Bandwidth: 1 << 20, // 1Mib
+			Latency:   time.Duration(runenv.IntParam("latency")) * time.Millisecond,
+			Bandwidth: 1 << runenv.IntParam("bandwidth"),
 		},
 		CallbackState: "network-configured",
 		RoutingPolicy: network.DenyAll,
@@ -113,17 +113,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	printMessagesFrom(ctx, subscribe)
 
 	if runenv.TestGroupID == "publisher" {
-		seq, _ := client.SignalEntry(ctx, "ready-to-publish")
-		if seq < 11 {
-			go streamFileTo(ctx, topic, runenv.StringParam("small"))
-			runenv.RecordMessage("published small file")
-		} else if seq < 23 {
-			go streamFileTo(ctx, topic, runenv.StringParam("medium"))
-			runenv.RecordMessage("published medium file")
-		} else {
-			go streamFileTo(ctx, topic, runenv.StringParam("large"))
-			runenv.RecordMessage("published large file")
-		}
+		go streamFileTo(ctx, topic, runenv.StringParam("file"))
+		runenv.RecordMessage(fmt.Sprintf("published file: %s", runenv.StringParam("file")))
 	}
 
 	select {}
