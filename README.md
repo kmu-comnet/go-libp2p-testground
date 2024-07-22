@@ -20,6 +20,7 @@ usage
                 && go get github.com/testground/sdk-go/sync
     653~655:    RUN cd ${PLAN_DIR} && CGO_ENABLED=${CgoEnabled} GOOS=linux go build -o ${PLAN_DIR}/testplan.bin ${BUILD_TAGS} ${TESTPLAN_EXEC_PKG}
 6. cd testground
-7. testground plan import --from /home/comnet/go-libp2p-testground
-8. testground daemon
-9. 새로운 쉘에서 testground run composition -f composition.toml
+7. make install
+8. testground plan import --from /home/comnet/go-libp2p-testground
+9. testground daemon
+10. 새로운 쉘에서 testground run composition -f composition.toml
