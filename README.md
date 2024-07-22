@@ -6,7 +6,7 @@ usage
 5. testground/pkg/build/docker_go.go 파일 수정
     29:         DefaultGoBuildBaseImage = "golang:1.22.5"
     583:        ARG RUNTIME_IMAGE=busybox:1.36.1-glibc
-    634~637:    RUN cd ${PLAN_DIR} && go mod download \
+    634-637:    RUN cd ${PLAN_DIR} && go mod download \
                 && go get github.com/libp2p/go-libp2p \
                 && go get github.com/libp2p/go-libp2p-kad-dht \
                 && go get github.com/libp2p/go-libp2p-pubsub \
