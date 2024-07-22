@@ -55,50 +55,53 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	containerAddr, _ := netclient.GetDataNetworkIP()
 	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
-	host, err := libp2p.New(libp2p.ListenAddrs(hostAddr))
+	host, _ := libp2p.New(libp2p.ListenAddrs(hostAddr))
 	runenv.RecordMessage("created libp2p host")
 
 	tgBootstrap := sync.NewTopic("bootstrap", nodeInfo{})
 	tgChannel := make(chan *nodeInfo, 1)
 	ready := sync.State("ready to bootstrap")
 	var bootstrap *peer.AddrInfo
+	var seq int64
 
-	if runenv.TestGroupID == "boot" {
-		bootInfo := nodeInfo{
+	switch runenv.TestGroupID {
+	case "boot":
+		myInfo := nodeInfo{
 			ID:   host.ID(),
-			Addr: hostAddr,
+			Addr: host.Addrs()[0],
 		}
-		client.PublishAndWait(ctx, tgBootstrap, bootInfo, ready, 50)
-		runenv.RecordMessage("published bootstrap info, waiting...")
+		runenv.RecordMessage("publishing bootstrap info...")
+		client.PublishAndWait(ctx, tgBootstrap, myInfo, ready, runenv.TestInstanceCount)
+		seq, err := client.SignalAndWait(ctx, ready, runenv.TestInstanceCount)
+		if err != nil {
+			fmt.Println(seq)
+			panic(err)
+		}
 		bootstrap = &peer.AddrInfo{
 			ID:    host.ID(),
-			Addrs: []ma.Multiaddr{hostAddr},
+			Addrs: host.Addrs(),
 		}
-
-	} else {
-
-		client.Subscribe(ctx, tgBootstrap, tgChannel)
+	case "worker":
+		tgSubscription, _ := client.Subscribe(ctx, tgBootstrap, tgChannel)
 		tgMessage := <-tgChannel
-
-		if tgMessage != nil {
-			fmt.Printf("tgMessage.ID: %s, Addr: %s", tgMessage.ID.String(), tgMessage.Addr.String())
-			bootstrap = &peer.AddrInfo{
-				ID:    tgMessage.ID,
-				Addrs: []ma.Multiaddr{tgMessage.Addr},
-			}
-			runenv.RecordMessage("received bootstrap info, signaling...")
-			client.SignalEntry(ctx, ready)
+		bootstrap = &peer.AddrInfo{
+			ID:    tgMessage.ID,
+			Addrs: []ma.Multiaddr{tgMessage.Addr},
 		}
+		runenv.RecordMessage("received bootstrap info, signaling...")
+		seq, err := client.SignalAndWait(ctx, ready, runenv.TestInstanceCount)
+		if err != nil {
+			fmt.Println(seq)
+			panic(err)
+		}
+		tgSubscription.Done()
+	default:
+		runenv.RecordMessage("invalid group id")
 	}
 
-	if bootstrap != nil {
-		runenv.RecordMessage("received bootstrap info, connecting...")
-		host.Connect(ctx, *bootstrap)
-		runenv.RecordMessage("connected to boot node, discovering peers...")
-	} else {
-		runenv.RecordMessage("failed to receive bootInfo, exiting...")
-		return err
-	}
+	runenv.RecordMessage("all peers ready, connecting...")
+	host.Connect(ctx, *bootstrap)
+	runenv.RecordMessage("connected to boot node, discovering peers...")
 
 	go discoverPeers(ctx, host)
 
@@ -113,7 +116,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("subscribed gossipsub topic")
 	printMessagesFrom(ctx, subscribe)
 
-	/*switch seq {
+	switch seq {
 	case 11:
 		go streamFileTo(ctx, topic, runenv.StringParam("small"))
 		runenv.RecordMessage("published small file")
@@ -124,7 +127,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		go streamFileTo(ctx, topic, runenv.StringParam("large"))
 		runenv.RecordMessage("published large file")
 	default:
-	}*/
+	}
 
 	return err
 }
