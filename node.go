@@ -32,7 +32,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	logging.Logger("libp2p")
 	logConfig := logging.Config{
 		File:   filepath.Join(runenv.TestOutputsPath, "libp2p.log"),
-		Level:  logging.LevelInfo,
+		Level:  logging.LevelDebug,
 		Stdout: true,
 		Format: logging.JSONOutput,
 	}
@@ -121,6 +121,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 }
 
 func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
+
+ time.Sleep(20 * time.Second)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Println("Error reading file:", err)
