@@ -14,6 +14,8 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 	peerstore "github.com/libp2p/go-libp2p/core/peerstore"
+	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
@@ -33,7 +35,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	logConfig := logging.Config{
 		File:   filepath.Join(runenv.TestOutputsPath, "libp2p.log"),
 		Level:  logging.LevelDebug,
-		Stdout: true,
+		Stdout: false,
 		Format: logging.JSONOutput,
 	}
 	logging.SetupLogging(logConfig)
@@ -42,13 +44,21 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
 
+	myLatency := runenv.IntParam("latency")
+	myBandwidth := runenv.IntParam("bandwidth")
+
+	if runenv.TestGroupID == "better" {
+		myLatency = runenv.IntParam("better_latency")
+		myBandwidth = runenv.IntParam("better_bandwidth")
+	}
+
 	netConfig := &network.Config{
 		Network: "default",
 
 		Enable: true,
 		Default: network.LinkShape{
-			Latency:   time.Duration(runenv.IntParam("latency")) * time.Millisecond,
-			Bandwidth: 1 << runenv.IntParam("bandwidth"),
+			Latency:   time.Duration(myLatency) * time.Millisecond,
+			Bandwidth: 1 << myBandwidth,
 		},
 		CallbackState: "network-configured",
 		RoutingPolicy: network.DenyAll,
@@ -67,9 +77,10 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		dht.BucketSize(20),
 	}
 
-	_, err := dht.New(ctx, host, dhtOpts...)
+	kad, _ := dht.New(ctx, host, dhtOpts...)
+	err := kad.Bootstrap(ctx)
 	if err != nil {
-		fmt.Printf("Failed initializing dht, error: %s\n", err)
+		panic(err)
 	}
 
 	var bootstrap peer.AddrInfo
@@ -101,28 +112,29 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		}
 	}
 
+	routingDiscovery := drouting.NewRoutingDiscovery(kad)
+	dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
+
 	gossipsub, _ := pubsub.NewGossipSub(ctx, host)
 	topic, _ := gossipsub.Join(*topicNameFlag)
 	runenv.RecordMessage("joined gossipsub topic")
+
+	if runenv.TestGroupID == "publisher" {
+		go streamFileTo(ctx, topic, runenv.StringParam("file"))
+	}
 
 	subscribe, err := topic.Subscribe()
 	if err != nil {
 		panic(err)
 	}
 	runenv.RecordMessage("subscribed gossipsub topic")
-	printMessagesFrom(ctx, subscribe)
-
-	if runenv.TestGroupID == "publisher" {
-		go streamFileTo(ctx, topic, runenv.StringParam("file"))
-		runenv.RecordMessage(fmt.Sprintf("published file: %s", runenv.StringParam("file")))
-	}
+	printMessagesFrom(ctx, subscribe, runenv)
 
 	select {}
 }
 
 func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
-
- time.Sleep(20 * time.Second)
+	time.Sleep(30 * time.Second)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Println("Error reading file:", err)
@@ -133,13 +145,14 @@ func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
 	}
 }
 
-func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription) {
+func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription, runenv *runtime.RunEnv) {
 	for {
 		message, err := subscribing.Next(ctx)
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println(message.ReceivedFrom, ": ", string(message.Message.Data))
+		fmt.Println("Received message from: ", message.ReceivedFrom)
+		runenv.D().Counter("got.msg").Inc(1)
 	}
 }
 

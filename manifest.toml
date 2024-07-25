@@ -26,19 +26,12 @@ instances = { min = 1, max = 11, default = 11 }
   bandwidth = { type = "int", default = 20 } # 1MB per second
 
 [[testcases]]
-name = "fifty-smallimage"
-instances = { min = 1, max = 51, default = 51 }
+name = "hundred-smallimage"
+instances = { min = 4, max = 102, default = 102 }
 
   [testcases.params]
   file = { type = "string", default = "../content/756KB.jpg" }
-  latency = { type = "int", default = 100 } # 100 millisecond
-  bandwidth = { type = "int", default = 20 } # 1MB per second
-
-[[testcases]]
-name = "hundred-bigimage"
-instances = { min = 1, max = 101, default = 101 }
-
-  [testcases.params]
-  file = { type = "string", default = "../content/2MB.jpg" }
-  latency = { type = "int", default = 100 } # 100 millisecond
-  bandwidth = { type = "int", default = 20 } # 1MB per second
+  better_latency = { type = "int", default = 100 } # 100 millisecond
+  better_bandwidth = { type = "int", default = 20 } # 1MB per second
+  latency = { type = "int", default = 100 }
+  bandwidth = { type = "int", default = 20 }
