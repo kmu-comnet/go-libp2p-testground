@@ -31,7 +31,7 @@ instances = { min = 4, max = 102, default = 102 }
 
   [testcases.params]
   file = { type = "string", default = "../content/756KB.jpg" }
-  better_latency = { type = "int", default = 100 } # 100 millisecond
-  better_bandwidth = { type = "int", default = 20 } # 1MB per second
+  better_latency = { type = "int", default = 10 } # 10 millisecond
+  better_bandwidth = { type = "int", default = 22 } # 4MB per second
   latency = { type = "int", default = 100 }
   bandwidth = { type = "int", default = 20 }
