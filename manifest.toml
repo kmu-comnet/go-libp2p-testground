@@ -17,7 +17,7 @@ enabled = true
 enabled = true
 
 [[testcases]]
-name = "ten-text"
+name = "textfile"
 instances = { min = 1, max = 11, default = 11 }
 
   [testcases.params]
@@ -26,7 +26,7 @@ instances = { min = 1, max = 11, default = 11 }
   bandwidth = { type = "int", default = 20 } # 1MB per second
 
 [[testcases]]
-name = "hundred-smallimage"
+name = "smallimage"
 instances = { min = 4, max = 102, default = 102 }
 
   [testcases.params]

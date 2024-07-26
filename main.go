@@ -5,8 +5,8 @@ import (
 )
 
 var testcases = map[string]interface{}{
-	"ten-text":           run.InitializedTestCaseFn(node),
-	"hundred-smallimage": run.InitializedTestCaseFn(node),
+	"textfile":   run.InitializedTestCaseFn(node),
+	"smallimage": run.InitializedTestCaseFn(node),
 }
 
 func main() {
