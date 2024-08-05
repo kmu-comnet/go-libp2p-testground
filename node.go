@@ -18,7 +18,6 @@ import (
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	ma "github.com/multiformats/go-multiaddr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/testground/sdk-go/network"
@@ -71,7 +70,10 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
 	netclient.MustConfigureNetwork(ctx, netConfig)
 
-	http.Handle("/debug/metrics/prometheus", promhttp.Handler())
+	go func() {
+		http.Handle("/debug/metrics/prometheus", promhttp.Handler())
+		panic(http.ListenAndServe(":5001", nil))
+	}()
 	rcmgr.MustRegisterWith(prometheus.DefaultRegisterer)
 
 	str, err := rcmgr.NewStatsTraceReporter()
@@ -84,17 +86,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		panic(err)
 	}
 
-	containerAddr, err := netclient.GetDataNetworkIP()
-	if err != nil {
-		panic(err)
-	}
-
-	myAddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
-	if err != nil {
-		panic(err)
-	}
-
-	host, err := libp2p.New(libp2p.ListenAddrs(myAddr), libp2p.ResourceManager(rmgr))
+	host, err := libp2p.New(libp2p.ResourceManager(rmgr))
 	if err != nil {
 		panic(err)
 	}
@@ -162,15 +154,16 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 	runenv.RecordMessage("joined gossipsub topic")
 
-	if runenv.TestGroupID == "publisher" {
-		go streamFileTo(ctx, topic, runenv.StringParam("file"))
-	}
-
 	subscribe, err := topic.Subscribe()
 	if err != nil {
 		panic(err)
 	}
 	runenv.RecordMessage("subscribed gossipsub topic")
+
+	if runenv.TestGroupID == "publisher" {
+		go streamFileTo(ctx, topic, runenv.StringParam("file"))
+	}
+
 	printMessagesFrom(ctx, subscribe, runenv)
 
 	select {}
