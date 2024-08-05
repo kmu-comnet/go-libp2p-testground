@@ -13,6 +13,8 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
@@ -20,7 +22,7 @@ import (
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/testground/sdk-go/network"
+	tgnetwork "github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
 	"github.com/testground/sdk-go/sync"
@@ -55,16 +57,16 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		myBandwidth = runenv.IntParam("better_bandwidth")
 	}
 
-	netConfig := &network.Config{
+	netConfig := &tgnetwork.Config{
 		Network: "default",
 
 		Enable: true,
-		Default: network.LinkShape{
+		Default: tgnetwork.LinkShape{
 			Latency:   time.Duration(myLatency) * time.Millisecond,
 			Bandwidth: 1 << myBandwidth,
 		},
 		CallbackState: "network-configured",
-		RoutingPolicy: network.DenyAll,
+		RoutingPolicy: tgnetwork.DenyAll,
 	}
 
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
@@ -86,18 +88,20 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		panic(err)
 	}
 
-	host, err := libp2p.New(libp2p.ResourceManager(rmgr))
+	node, err := libp2p.New(libp2p.ResourceManager(rmgr))
 	if err != nil {
 		panic(err)
 	}
-	runenv.RecordMessage("created libp2p host")
+	runenv.RecordMessage("created libp2p node")
+
+	repo := node.Peerstore()
 
 	dhtOpts := []dht.Option{
 		dht.Mode(dht.ModeServer),
 		dht.BucketSize(20),
 	}
 
-	kad, err := dht.New(ctx, host, dhtOpts...)
+	kad, err := dht.New(ctx, node, dhtOpts...)
 	if err != nil {
 		panic(err)
 	}
@@ -111,8 +115,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	if runenv.TestGroupID == "boot" {
 		myInfo := peer.AddrInfo{
-			ID:    host.ID(),
-			Addrs: host.Addrs(),
+			ID:    node.ID(),
+			Addrs: node.Addrs(),
 		}
 		runenv.RecordMessage("publishing bootstrap info...")
 		err := tgPublish(ctx, client, myInfo)
@@ -129,10 +133,10 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		bootstrap = bootInfo
 
 		runenv.RecordMessage("received bootstrap info, adding address...")
-		host.Peerstore().AddAddr(bootstrap.ID, bootstrap.Addrs[0], peerstore.PermanentAddrTTL)
+		repo.AddAddr(bootstrap.ID, bootstrap.Addrs[0], peerstore.PermanentAddrTTL)
 
 		runenv.RecordMessage("all peers ready, connecting...")
-		err = host.Connect(ctx, bootstrap)
+		err = node.Connect(ctx, bootstrap)
 		if err != nil {
 			fmt.Printf("Failed connecting to %s, error: %s\n", bootstrap.ID, err)
 		} else {
@@ -143,7 +147,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	routingDiscovery := drouting.NewRoutingDiscovery(kad)
 	dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
 
-	gossipsub, err := pubsub.NewGossipSub(ctx, host)
+	gossipsub, err := pubsub.NewGossipSub(ctx, node)
 	if err != nil {
 		panic(err)
 	}
@@ -162,9 +166,23 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	if runenv.TestGroupID == "publisher" {
 		go streamFileTo(ctx, topic, runenv.StringParam("file"))
+	} else {
+		go printMessagesFrom(ctx, subscribe, runenv)
 	}
 
-	printMessagesFrom(ctx, subscribe, runenv)
+	if runenv.TestGroupID == "churn" {
+		waitChannel := make(chan host.Host)
+		go rebootHost(rmgr, node, repo, runenv.IntParam("timer"))
+		newNode := <-waitChannel
+
+		gossipsub, _ := pubsub.NewGossipSub(ctx, newNode)
+		topic, _ := gossipsub.Join(*topicNameFlag)
+		runenv.RecordMessage("joined gossipsub topic, again")
+
+		subscribe, _ := topic.Subscribe()
+		runenv.RecordMessage("subscribed gossipsub topic, again")
+		go printMessagesFrom(ctx, subscribe, runenv)
+	}
 
 	select {}
 }
@@ -190,6 +208,16 @@ func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription, ru
 		fmt.Println("Received message from: ", message.ReceivedFrom)
 		runenv.D().Counter("got.msg").Inc(1)
 	}
+}
+
+func rebootHost(rcmgr network.ResourceManager, host host.Host, repo peerstore.Peerstore, timer int) host.Host {
+	time.Sleep(time.Duration(timer) * time.Second)
+	host.Close()
+	newHost, err := libp2p.New(libp2p.Peerstore(repo), libp2p.ResourceManager(rcmgr))
+	if err != nil {
+		panic(err)
+	}
+	return newHost
 }
 
 func tgPublish(ctx context.Context, client sync.Client, payload peer.AddrInfo) error {
