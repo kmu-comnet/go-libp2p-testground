@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -20,6 +22,7 @@ import (
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	tgnetwork "github.com/testground/sdk-go/network"
@@ -72,6 +75,9 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("before netclient.MustConfigureNetwork")
 	netclient.MustConfigureNetwork(ctx, netConfig)
 
+	containerAddr, _ := netclient.GetDataNetworkIP()
+	multiAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/3000", containerAddr.To4().String()))
+
 	go func() {
 		http.Handle("/debug/metrics/prometheus", promhttp.Handler())
 		panic(http.ListenAndServe(":5001", nil))
@@ -88,13 +94,13 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		panic(err)
 	}
 
-	node, err := libp2p.New(libp2p.ResourceManager(rmgr))
+	privKey, _, _ := crypto.GenerateKeyPair(crypto.RSA, 2048)
+
+	node, err := libp2p.New(libp2p.Identity(privKey), libp2p.ListenAddrs(multiAddr), libp2p.ResourceManager(rmgr))
 	if err != nil {
 		panic(err)
 	}
-	runenv.RecordMessage("created libp2p node")
-
-	repo := node.Peerstore()
+	runenv.RecordMessage(fmt.Sprintf("created libp2p host, ID: %s", node.ID()))
 
 	dhtOpts := []dht.Option{
 		dht.Mode(dht.ModeServer),
@@ -133,14 +139,14 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		bootstrap = bootInfo
 
 		runenv.RecordMessage("received bootstrap info, adding address...")
-		repo.AddAddr(bootstrap.ID, bootstrap.Addrs[0], peerstore.PermanentAddrTTL)
+		node.Peerstore().AddAddr(bootstrap.ID, bootstrap.Addrs[0], peerstore.PermanentAddrTTL)
 
 		runenv.RecordMessage("all peers ready, connecting...")
 		err = node.Connect(ctx, bootstrap)
 		if err != nil {
 			fmt.Printf("Failed connecting to %s, error: %s\n", bootstrap.ID, err)
 		} else {
-			fmt.Println("Connected to:", bootstrap.ID)
+			runenv.RecordMessage(fmt.Sprintf("Connected to: %s", bootstrap.ID))
 		}
 	}
 
@@ -165,15 +171,23 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("subscribed gossipsub topic")
 
 	if runenv.TestGroupID == "publisher" {
-		go streamFileTo(ctx, topic, runenv.StringParam("file"))
+		go streamFileTo(ctx, topic, runenv.StringParam("imagefile"))
 	} else {
 		go printMessagesFrom(ctx, subscribe, runenv)
 	}
 
-	if runenv.TestGroupID == "churn" {
+	if strings.HasPrefix(runenv.TestGroupID, "churn") {
 		waitChannel := make(chan host.Host)
-		go rebootHost(rmgr, node, repo, runenv.IntParam("timer"))
+		go rebootHost(rmgr, node, privKey, runenv.IntParam("timer"), waitChannel, runenv)
 		newNode := <-waitChannel
+
+		dhtOpts := []dht.Option{
+			dht.Mode(dht.ModeServer),
+			dht.BucketSize(20),
+		}
+
+		kad, _ := dht.New(ctx, node, dhtOpts...)
+		_ = kad.Bootstrap(ctx)
 
 		gossipsub, _ := pubsub.NewGossipSub(ctx, newNode)
 		topic, _ := gossipsub.Join(*topicNameFlag)
@@ -181,7 +195,15 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		subscribe, _ := topic.Subscribe()
 		runenv.RecordMessage("subscribed gossipsub topic, again")
-		go printMessagesFrom(ctx, subscribe, runenv)
+
+		routingDiscovery := drouting.NewRoutingDiscovery(kad)
+		dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
+
+		if runenv.TestGroupID == "churn-publisher" {
+			go streamFileTo(ctx, topic, runenv.StringParam("textfile"))
+		} else {
+			go printMessagesFrom(ctx, subscribe, runenv)
+		}
 	}
 
 	select {}
@@ -205,19 +227,23 @@ func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription, ru
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println("Received message from: ", message.ReceivedFrom)
+		runenv.RecordMessage(fmt.Sprintf("Received message from: %s", message.ReceivedFrom))
 		runenv.D().Counter("got.msg").Inc(1)
 	}
 }
 
-func rebootHost(rcmgr network.ResourceManager, host host.Host, repo peerstore.Peerstore, timer int) host.Host {
+func rebootHost(rcmgr network.ResourceManager, oldHost host.Host, privKey crypto.PrivKey, timer int, waitChannel chan host.Host, runenv *runtime.RunEnv) {
+
+	peers := oldHost.Peerstore()
+	addrs := oldHost.Addrs()
+
 	time.Sleep(time.Duration(timer) * time.Second)
-	host.Close()
-	newHost, err := libp2p.New(libp2p.Peerstore(repo), libp2p.ResourceManager(rcmgr))
-	if err != nil {
-		panic(err)
-	}
-	return newHost
+	oldHost.Close()
+	runenv.RecordMessage("closed libp2p host")
+	time.Sleep(time.Duration(timer) / 2 * time.Second)
+	newHost, _ := libp2p.New(libp2p.Identity(privKey), libp2p.ListenAddrs(addrs[0]), libp2p.Peerstore(peers), libp2p.ResourceManager(rcmgr))
+	runenv.RecordMessage(fmt.Sprintf("created libp2p host, again, ID: %s", newHost.ID()))
+	waitChannel <- newHost
 }
 
 func tgPublish(ctx context.Context, client sync.Client, payload peer.AddrInfo) error {
@@ -235,10 +261,7 @@ func tgSubscribe(ctx context.Context, client sync.Client, runenv *runtime.RunEnv
 
 	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
 	tgChannel := make(chan peer.AddrInfo, 1)
-	_, err := client.Subscribe(subCtx, tgTopic, tgChannel)
-	if err != nil {
-		panic(err)
-	}
+	_, _ = client.Subscribe(subCtx, tgTopic, tgChannel)
 
 	bootInfo := peer.AddrInfo{}
 

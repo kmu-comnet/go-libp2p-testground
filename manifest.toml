@@ -30,8 +30,10 @@ name = "smallimage"
 instances = { min = 4, max = 102, default = 102 }
 
   [testcases.params]
-  file = { type = "string", default = "../content/756KB.jpg" }
+  textfile = { type = "string", default = "../content/1KB.txt" }
+  imagefile = { type = "string", default = "../content/756KB.jpg" }
   better_latency = { type = "int", default = 10 } # 10 millisecond
   better_bandwidth = { type = "int", default = 22 } # 4MB per second
   latency = { type = "int", default = 100 }
   bandwidth = { type = "int", default = 20 }
+  timer = { type = "int", default = 100 }
