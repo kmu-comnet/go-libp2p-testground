@@ -7,6 +7,7 @@ require (
 	github.com/libp2p/go-libp2p v0.35.4
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/libp2p/go-libp2p-pubsub v0.11.0
+	github.com/multiformats/go-multiaddr v0.13.0
 	github.com/prometheus/client_golang v1.19.1
 	github.com/testground/sdk-go v0.3.1-0.20220525111316-b6b10897b578
 )
@@ -73,7 +74,6 @@ require (
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr v0.13.0 // indirect
 	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
