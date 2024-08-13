@@ -25,7 +25,6 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	tgnetwork "github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
 	"github.com/testground/sdk-go/sync"
@@ -41,9 +40,9 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	flag.Parse()
 	ctx := context.Background()
 
-	// libp2p 로그 작성 모듈(ipfs/go-log/v2)을 설정합니다. 
-	// Testground 로그와 별개로 libp2p 코드베이스에서 배출하는 로그를 수집하고 파일에 쓰는 역할을 합니다. 
-	// 실험이 진행되는 동안 testground/data/outputs 경로에 libp2p.log 파일이 JSON 형식으로 작성되고, Stdout 여부에 따라 콘솔에도 출력됩니다. 
+	// libp2p 로그 작성 모듈(ipfs/go-log/v2)을 설정합니다.
+	// Testground 로그와 별개로 libp2p 코드베이스에서 배출하는 로그를 수집하고 파일에 쓰는 역할을 합니다.
+	// 실험이 진행되는 동안 testground/data/outputs 경로에 libp2p.log 파일이 JSON 형식으로 작성되고, Stdout 여부에 따라 콘솔에도 출력됩니다.
 	// 로그의 중요도에 따라 필터링이 가능한데, LevelDebug가 가장 상세하고 그 다음 수준은 Info 입니다.
 	logging.Logger("libp2p")
 	logConfig := logging.Config{
@@ -54,38 +53,11 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	}
 	logging.SetupLogging(logConfig)
 
-	// Testground 클라이언트(테스트를 주관하는 daemon, 테스트 시작 명령을 전달한 CLI client와 별개로 
+	// Testground 클라이언트(테스트를 주관하는 daemon, 테스트 시작 명령을 전달한 CLI client와 별개로
 	// 프로그램 내부에서 Testground daemon과 소통하는 주체를 SyncClient, NetClient로 부릅니다.)를 initialize합니다.
 	runenv.RecordMessage("before sync.MustBoundClient")
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
-
-	myLatency := runenv.IntParam("latency")
-	myBandwidth := runenv.IntParam("bandwidth")
-
-	// composition.toml 에서 정의한 test group 별로 다른 레이턴시와 대역폭을 사용합니다.
-	if runenv.TestGroupID == "better" {
-		myLatency = runenv.IntParam("better_latency")
-		myBandwidth = runenv.IntParam("better_bandwidth")
-	}
-
-	// testground에서 제공하는 netConfig 객체를 생성합니다.
-	// 지연과 대역폭 설정에 manifest.toml에서 지정했던 파라미터들을 불러와 사용하도록 합니다. 
-	netConfig := &tgnetwork.Config{
-		Network: "default",
-
-		Enable: true,
-		Default: tgnetwork.LinkShape{
-			Latency:   time.Duration(myLatency) * time.Millisecond,
-			Bandwidth: 1 << myBandwidth,
-		},
-		CallbackState: "network-configured",
-		RoutingPolicy: tgnetwork.DenyAll,
-	}
-
-	// 그리고 설정한 내용을 NetClient에게 전달해 네트워크(Testground가 생성하는 도커 브릿지 네트워크) 설정을 마치도록 합니다.
-	runenv.RecordMessage("before netclient.MustConfigureNetwork")
-	netclient.MustConfigureNetwork(ctx, netConfig)
 
 	// testground netClient로부터 sync service에 쓰이는 것과 다른 ip(테스트 인스턴스들 간 통신에 쓰임) 주소를 얻어옵니다.
 	// 그리고 libp2p에서 쓰이는 multiaddr 형식으로 변환합니다.
@@ -97,7 +69,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		http.Handle("/debug/metrics/prometheus", promhttp.Handler())
 		panic(http.ListenAndServe(":5001", nil))
 	}()
-	
+
 	// 리소스 관리자 관련 코드입니다. (TODO)
 	rcmgr.MustRegisterWith(prometheus.DefaultRegisterer)
 	str, _ := rcmgr.NewStatsTraceReporter()
@@ -109,15 +81,6 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	node, _ := libp2p.New(libp2p.Identity(privKey), libp2p.ListenAddrs(multiAddr), libp2p.ResourceManager(rmgr))
 	runenv.RecordMessage(fmt.Sprintf("created libp2p host, ID: %s", node.ID()))
 
-	// 카뎀리아 dht를 구성할 옵션을 설정합니다.
-	dhtOpts := []dht.Option{
-		dht.Mode(dht.ModeServer),
-		dht.BucketSize(20),
-	}
-
-	// 카뎀리아 dht를 생성합니다.
-	kad, _ := dht.New(ctx, node, dhtOpts...)
-
 	// composition.toml에서 설정한 test group id가 boot인 경우 자신의 ID와 multiaddr을
 	// testground에서 제공하는 publish 기능을 통해 배포합니다.
 	if runenv.TestGroupID == "boot" {
@@ -126,11 +89,11 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			Addrs: node.Addrs(),
 		}
 		runenv.RecordMessage("publishing bootstrap info...")
-		_ = tgPublish(ctx, client, myInfo)
-	
-	// boot 그룹 외 모든 그룹은 해당 내용을 subscribe하여 peerStore에 주소를 추가하고, 연결을 시도합니다.
+		_ = tgPublish(client, myInfo)
+
+		// boot 그룹 외 모든 그룹은 해당 내용을 subscribe하여 peerStore에 주소를 추가하고, 연결을 시도합니다.
 	} else {
-		tgBootstrap, _ := tgSubscribe(ctx, client, runenv)
+		tgBootstrap, _ := tgSubscribe(client, runenv)
 
 		runenv.RecordMessage("received bootstrap info, adding address...")
 		node.Peerstore().AddAddr(tgBootstrap.ID, tgBootstrap.Addrs[0], peerstore.PermanentAddrTTL)
@@ -140,6 +103,13 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 		runenv.RecordMessage(fmt.Sprintf("Connected to: %s", tgBootstrap.ID))
 	}
 
+	// 카뎀리아 dht를 구성할 옵션을 설정합니다.
+	dhtOpts := []dht.Option{
+		dht.Mode(dht.ModeServer),
+		dht.BucketSize(20),
+	}
+	// 카뎀리아 dht를 생성합니다.
+	kad, _ := dht.New(ctx, node, dhtOpts...)
 	// kademlia 부트스트랩을 시작하고, gossipsub에서 kademlia 주소록을 쓸 수 있도록 합니다. (TODO)
 	_ = kad.Bootstrap(ctx)
 	routingDiscovery := drouting.NewRoutingDiscovery(kad)
@@ -174,6 +144,8 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		kad, _ := dht.New(ctx, node, dhtOpts...)
 		_ = kad.Bootstrap(ctx)
+		routingDiscovery := drouting.NewRoutingDiscovery(kad)
+		dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
 
 		gossipsub, _ := pubsub.NewGossipSub(ctx, newNode)
 		topic, _ := gossipsub.Join(*topicNameFlag)
@@ -181,9 +153,6 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		subscribe, _ := topic.Subscribe()
 		runenv.RecordMessage("subscribed gossipsub topic, again")
-
-		routingDiscovery := drouting.NewRoutingDiscovery(kad)
-		dutil.Advertise(ctx, routingDiscovery, *topicNameFlag)
 
 		// test group id가 churn-publisher인 경우 호스트 재부팅 후 textfile을 배포합니다.
 		if runenv.TestGroupID == "churn-publisher" {
@@ -231,9 +200,8 @@ func rebootHost(rcmgr network.ResourceManager, oldHost host.Host, privKey crypto
 }
 
 // testground에서 제공하는 publish 기능을 사용하는 함수입니다.
-func tgPublish(ctx context.Context, client sync.Client, payload peer.AddrInfo) error {
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func tgPublish(client sync.Client, payload peer.AddrInfo) error {
+	subCtx := context.Background()
 
 	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
 	_, err := client.Publish(subCtx, tgTopic, payload)
@@ -242,23 +210,15 @@ func tgPublish(ctx context.Context, client sync.Client, payload peer.AddrInfo) e
 
 // testground에서 제공하는 subscribe 기능을 사용하는 함수입니다.
 // 내용을 수신하는데 성공하면 influxdb의 카운터를 증가시킵니다.
-func tgSubscribe(ctx context.Context, client sync.Client, runenv *runtime.RunEnv) (peer.AddrInfo, error) {
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func tgSubscribe(client sync.Client, runenv *runtime.RunEnv) (peer.AddrInfo, error) {
+	subCtx := context.Background()
 
 	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
 	tgChannel := make(chan peer.AddrInfo, 1)
 	_, _ = client.Subscribe(subCtx, tgTopic, tgChannel)
 
-	bootInfo := peer.AddrInfo{}
-
-	select {
-	case tgMessage := <-tgChannel:
-		bootInfo = peer.AddrInfo(tgMessage)
-	case <-ctx.Done():
-		return bootInfo, ctx.Err()
-	}
+	tgMessage := <-tgChannel
 	runenv.D().Counter("got.info").Inc(1)
 
-	return bootInfo, nil
+	return tgMessage, nil
 }
