@@ -185,7 +185,6 @@ func printMessagesFrom(ctx context.Context, subscribing *pubsub.Subscription, ru
 	for {
 		message, _ := subscribing.Next(ctx)
 		runenv.RecordMessage(fmt.Sprintf("Received message from: %s", message.ReceivedFrom))
-		runenv.D().Counter("got.msg").Inc(1)
 	}
 }
 
