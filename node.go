@@ -36,7 +36,7 @@ var (
 	topicNameFlag = flag.String("topicName", "comnet", "name of topic to join")
 )
 
-func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
+func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	flag.Parse()
 	ctx := context.Background()
 
@@ -124,7 +124,7 @@ func node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	subscribe, _ := topic.Subscribe()
 	runenv.RecordMessage("subscribed gossipsub topic")
 
-	runenv.RecordMessage("This is version 004")
+	runenv.RecordMessage("This is version v0.1.0")
 
 	// test group id가 publisher인 경우 imagefile 파라미터(파일의 경로를 나타내는 문자열)를 불러와 배포합니다.
 	if runenv.TestGroupID == "publisher" {
