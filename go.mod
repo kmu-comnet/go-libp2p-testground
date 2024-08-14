@@ -1,4 +1,4 @@
-module node
+module github.com/kmu-comnet/go-libp2p-testground
 
 go 1.22.5
 
