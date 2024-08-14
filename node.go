@@ -199,6 +199,7 @@ func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
 	time.Sleep(20 * time.Second)
 	data, _ := os.ReadFile(filePath)
 	_ = topic.Publish(ctx, data)
+	fmt.Println("Published file to topic")
 }
 
 // 구독하고 있는 topic의 새로운 메시지를 수신하면 전달자의 ID와 함꼐 메시지를 받았다는 문자열을 출력합니다.
