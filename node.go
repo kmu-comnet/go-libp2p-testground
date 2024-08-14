@@ -25,6 +25,7 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	tgnetwork "github.com/testground/sdk-go/network"
 	"github.com/testground/sdk-go/run"
 	"github.com/testground/sdk-go/runtime"
 	"github.com/testground/sdk-go/sync"
@@ -58,6 +59,29 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	runenv.RecordMessage("before sync.MustBoundClient")
 	client := initCtx.SyncClient
 	netclient := initCtx.NetClient
+
+	myLatency := runenv.IntParam("latency")
+	myBandwidth := runenv.IntParam("bandwidth")
+
+	if runenv.TestGroupID == "better" {
+		myLatency = runenv.IntParam("better_latency")
+		myBandwidth = runenv.IntParam("better_bandwidth")
+	}
+
+	netConfig := &tgnetwork.Config{
+		Network: "default",
+
+		Enable: true,
+		Default: tgnetwork.LinkShape{
+			Latency:   time.Duration(myLatency) * time.Millisecond,
+			Bandwidth: 1 << myBandwidth,
+		},
+		CallbackState: "network-configured",
+		RoutingPolicy: tgnetwork.DenyAll,
+	}
+
+	runenv.RecordMessage("before netclient.MustConfigureNetwork")
+	netclient.MustConfigureNetwork(ctx, netConfig)
 
 	// testground netClient로부터 sync service에 쓰이는 것과 다른 ip(테스트 인스턴스들 간 통신에 쓰임) 주소를 얻어옵니다.
 	// 그리고 libp2p에서 쓰이는 multiaddr 형식으로 변환합니다.
@@ -128,8 +152,6 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	// topic을 구독합니다.
 	subscribe, _ := topic.Subscribe()
 	runenv.RecordMessage("subscribed gossipsub topic")
-
-	runenv.RecordMessage("This is version 007")
 
 	// test group id가 publisher인 경우 imagefile 파라미터(파일의 경로를 나타내는 문자열)를 불러와 배포합니다.
 	if runenv.TestGroupID == "publisher" {
