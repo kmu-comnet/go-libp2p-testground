@@ -89,11 +89,16 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 			Addrs: node.Addrs(),
 		}
 		runenv.RecordMessage("publishing bootstrap info...")
-		_ = tgPublish(client, myInfo)
+		tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
+		_, _ = client.Publish(ctx, tgTopic, myInfo)
 
 		// boot 그룹 외 모든 그룹은 해당 내용을 subscribe하여 peerStore에 주소를 추가하고, 연결을 시도합니다.
 	} else {
-		tgBootstrap, _ := tgSubscribe(client, runenv)
+		tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
+		tgChannel := make(chan peer.AddrInfo, 1)
+		_, _ = client.Subscribe(ctx, tgTopic, tgChannel)
+
+		tgBootstrap := <-tgChannel
 
 		runenv.RecordMessage("received bootstrap info, adding address...")
 		node.Peerstore().AddAddr(tgBootstrap.ID, tgBootstrap.Addrs[0], peerstore.PermanentAddrTTL)
@@ -124,7 +129,7 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 	subscribe, _ := topic.Subscribe()
 	runenv.RecordMessage("subscribed gossipsub topic")
 
-	runenv.RecordMessage("This is version 006")
+	runenv.RecordMessage("This is version 007")
 
 	// test group id가 publisher인 경우 imagefile 파라미터(파일의 경로를 나타내는 문자열)를 불러와 배포합니다.
 	if runenv.TestGroupID == "publisher" {
@@ -199,28 +204,4 @@ func rebootHost(rcmgr network.ResourceManager, oldHost host.Host, privKey crypto
 	runenv.RecordMessage(fmt.Sprintf("created libp2p host, again, ID: %s", newHost.ID()))
 
 	waitChannel <- newHost
-}
-
-// testground에서 제공하는 publish 기능을 사용하는 함수입니다.
-func tgPublish(client sync.Client, payload peer.AddrInfo) error {
-	subCtx := context.Background()
-
-	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
-	_, err := client.Publish(subCtx, tgTopic, payload)
-	return err
-}
-
-// testground에서 제공하는 subscribe 기능을 사용하는 함수입니다.
-// 내용을 수신하는데 성공하면 influxdb의 카운터를 증가시킵니다.
-func tgSubscribe(client sync.Client, runenv *runtime.RunEnv) (peer.AddrInfo, error) {
-	subCtx := context.Background()
-
-	tgTopic := sync.NewTopic("bootstrap", peer.AddrInfo{})
-	tgChannel := make(chan peer.AddrInfo, 1)
-	_, _ = client.Subscribe(subCtx, tgTopic, tgChannel)
-
-	tgMessage := <-tgChannel
-	runenv.D().Counter("got.info").Inc(1)
-
-	return tgMessage, nil
 }
