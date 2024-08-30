@@ -155,7 +155,7 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 	// test group id가 publisher인 경우 imagefile 파라미터(파일의 경로를 나타내는 문자열)를 불러와 배포합니다.
 	if runenv.TestGroupID == "publisher" {
-		go streamFileTo(ctx, topic, runenv.StringParam("imagefile"))
+		go streamFileTo(ctx, topic, runenv.StringParam("imagefile"), runenv)
 	}
 	// gossipsub 메시지를 수신했다는 메시지를 콘솔에 출력하는 함수를 비동기적으로 실행합니다.
 	go printMessagesFrom(ctx, subscribe, runenv)
@@ -185,7 +185,7 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 
 		// test group id가 churn-publisher인 경우 호스트 재부팅 후 textfile을 배포합니다.
 		if runenv.TestGroupID == "churn-publisher" {
-			go streamFileTo(ctx, topic, runenv.StringParam("textfile"))
+			go streamFileTo(ctx, topic, runenv.StringParam("textfile"), runenv)
 		}
 		go printMessagesFrom(ctx, subscribe, runenv)
 	}
@@ -195,11 +195,11 @@ func Node(runenv *runtime.RunEnv, initCtx *run.InitContext) error {
 }
 
 // 라우팅 테이블이 안정되기까지 기다리기 위해, 20초 가량 기다렸다가 파일을 publish 합니다.
-func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string) {
+func streamFileTo(ctx context.Context, topic *pubsub.Topic, filePath string, runenv *runtime.RunEnv) {
 	time.Sleep(20 * time.Second)
 	data, _ := os.ReadFile(filePath)
+	runenv.RecordMessage("Publishing file...")
 	_ = topic.Publish(ctx, data)
-	fmt.Println("Published file to topic")
 }
 
 // 구독하고 있는 topic의 새로운 메시지를 수신하면 전달자의 ID와 함꼐 메시지를 받았다는 문자열을 출력합니다.
